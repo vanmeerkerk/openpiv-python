@@ -11,128 +11,6 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-
-def get_pixel_coordinates(img):
-    """Get pixel coordinates given an image
-
-    Parameters
-    ----------
-    img : np.ndarray
-        NxMx1 or NxMx3 image matrix
-
-    Returns
-    -------
-    np.ndarray
-        NxM matrix containing u-coordinates
-    np.ndarray
-        NxM matrix containing v-coordinates
-    """
-
-    # get pixel coordinates
-    U, V = np.meshgrid(range(img.shape[1]), range(img.shape[0]))
-
-    return U, V
-
-
-def rectify_coordinates(U, V, H):
-    """Get projection of image pixels in real-world coordinates
-    given image coordinate matrices and  homography
-
-    Parameters
-    ----------
-    U : np.ndarray
-        NxM matrix containing u-coordinates
-    V : np.ndarray
-        NxM matrix containing v-coordinates
-    H : np.ndarray
-        3x3 homography matrix
-
-    Returns
-    -------
-    np.ndarray
-        NxM matrix containing real-world x-coordinates
-    np.ndarray
-        NxM matrix containing real-world y-coordinates
-    """
-
-    UV = np.vstack((U.flatten(), V.flatten())).T
-
-    # transform image using homography
-    XY = cv.perspectiveTransform(np.asarray([UV]).astype(np.float32), H)[0]
-
-    # reshape pixel coordinates back to image size
-    X = XY[:, 0].reshape(U.shape[:2])
-    Y = XY[:, 1].reshape(V.shape[:2])
-
-    return X, Y
-
-
-def rectify_image(img, H):
-    """Get projection of image pixels in real-world coordinates
-    given an image and homography
-
-    Parameters
-    ----------
-    img : np.ndarray
-        NxMx1 or NxMx3 image matrix
-    H : np.ndarray
-        3x3 homography matrix
-
-    Returns
-    -------
-    np.ndarray
-        NxM matrix containing real-world x-coordinates
-    np.ndarray
-        NxM matrix containing real-world y-coordinates
-    """
-
-    U, V = get_pixel_coordinates(img)
-    X, Y = rectify_coordinates(U, V, H)
-
-    return X, Y
-
-
-def draw_axis(
-    img,
-    R,
-    t,
-    K,
-    length_of_axis=100,
-    offset_point=(183803.158, 441756.219, 10.267),
-    thickness=5,
-):
-    # unit is mm
-    rotV, _ = cv.Rodrigues(R)
-    # Define points to project on the image
-    points = np.float32(
-        [
-            [length_of_axis, 0, 0],
-            [0, length_of_axis, 0],
-            [0, 0, length_of_axis],
-            [0, 0, 0],
-        ]
-    )
-    # Add offset
-    points = points + np.array(offset_point)
-
-    # Reshape points
-    points = points.reshape(-1, 3)
-    # Project points
-    axisPoints, _ = cv.projectPoints(points, rotV, t, K, (0, 0, 0, 0))
-    # Plot lines from the center to the projected points
-    corner = tuple(axisPoints[-1].ravel().astype(int))
-    img = cv.line(
-        img, corner, tuple(axisPoints[0].ravel().astype(int)), (255, 0, 0), thickness
-    )
-    img = cv.line(
-        img, corner, tuple(axisPoints[1].ravel().astype(int)), (0, 255, 0), thickness
-    )
-    img = cv.line(
-        img, corner, tuple(axisPoints[2].ravel().astype(int)), (0, 0, 255), thickness
-    )
-    return img
-
-
 if __name__ == "__main__":
     # Data file
     data_file = Path(
@@ -186,9 +64,6 @@ if __name__ == "__main__":
     )
 
     # Check backprojection error: we do not obtain an accurate back-projection result. The method in itself seems to be correct!
-    # P = np.matmul(camera_matrix, np.hstack([cv.Rodrigues(rotation_vector)[0], translation_vector]))
-    # homo_object_points = (np.hstack([object_points, np.ones((object_points.shape[0], 1))])).T
-    # back_proj_image_points = np.matmul(P, homo_object_points)
     back_proj_image_points, _ = cv.projectPoints(
         object_points,
         rotation_vector,
@@ -250,21 +125,10 @@ if __name__ == "__main__":
     )
     # Compute homography matrix
     H = np.linalg.inv(np.matmul(new_camera_matrix, R_open_earth))
-    # Determine offset with the inverse of the homography matrix on the image (0, 0) point in homogeneous coordinates
-    # x_offset, y_offset, _ = -np.linalg.inv(H).dot(np.array([0, 0, 1]))
-    # x_offset, y_offset = 0, 0  # 31.1
-    # x_offset, y_offset = np.array(image.shape[:2]) // 2
-    # # Apply offset to homography matrix
-    # # x_offset, y_offset = new_camera_matrix[:2, 2].astype(np.int32)
-
-    # H_shift = np.eye(3)
-    # H_shift[:2, 2] = np.array([x_offset, y_offset])
-    # Offseted homography matrix
-    # H = H_shift.dot(H)
     # Normalize homography matrix
     H = H / H[2, 2]
 
-    # warp image corner points:
+    # warp image corner points to determine bounding box
     w, h, _ = image.shape
     points = [[0, 0], [0, h], [w, h], [w, 0]]
     points = np.array(points, np.float32).reshape(-1, 1, 2)
@@ -284,21 +148,6 @@ if __name__ == "__main__":
     ).squeeze()
     bbox_shift = cv.boundingRect(warped_points_shift.astype(np.int32))
 
-    # # Rotate image about center see https://docs.opencv.org/2.4/modules/imgproc/doc/geometric_transformations.html?highlight=getperspective#getrotationmatrix2d
-    # image_warped = cv.warpPerspective(
-    #     image_undistorted,
-    #     np.matmul(H_shift, H),
-    #     (bbox_shift[2], bbox_shift[3]),
-    #     cv.INTER_NEAREST,
-    # )
-    # Rotate
-    # from scipy import ndimage
-
-    # angle = -82.5  # (90 - 29.16761337957779)
-    # # Angel from direction of driel
-    # angle = -62.5
-
-    # image_warped_and_rotated = ndimage.rotate(image_warped, angle, reshape=True)
     # Determine the scaling homography
     sx, sy = 100, 100
     H_scale = np.eye(3)
@@ -316,7 +165,7 @@ if __name__ == "__main__":
     x_limit_array = x_domain_size * np.array([-0.5, 0.5])
     x_domain_min, x_domain_max = (x_limit_array + reference_point[0]).astype(int)
 
-    y_limit_array = np.array([-10, 200]) * sy
+    y_limit_array = np.array([-5, 200]) * sy
     y_domain_min, y_domain_max = (y_limit_array - reference_point[1]).astype(int)
 
     # Determine extend of warpPerspective
@@ -346,75 +195,3 @@ if __name__ == "__main__":
     plt.ylim(y_limit_array)
     plt.xlabel(r"$x$ [cm]")
     plt.ylabel(r"$y$ [cm]")
-#     # get size and offset of warped corner points:
-#     xmin, ymin = warped_points.min(axis=0)
-#     xmax, ymax = warped_points.max(axis=0)
-
-#     # size:
-#     warped_image_size = int(round(xmax - xmin)), int(round(ymax - ymin))
-
-#     # warp image
-#     image_warped = cv.warpPerspective(
-#         image_undistorted, H, warped_image_size, cv.INTER_CUBIC
-#     )
-#     # Rotate image about center see https://docs.opencv.org/2.4/modules/imgproc/doc/geometric_transformations.html?highlight=getperspective#getrotationmatrix2d
-#     # # Plot image
-#     plt.figure()
-#     plt.imshow(image_warped)
-#     plt.gca().invert_yaxis()
-
-#     # warped_image_size = int(round(X.max()-X.min())), int(round(Y.max()-Y.min()))
-#     # # # offset:
-#     # # Ht = np.eye(3)
-#     # # Ht[0, 2] = -xmin
-#     # # Ht[1, 2] = -ymin
-
-#     # # H = Ht @ Hr
-
-#     # test = 0
-#     # # # Draw the axis on the image
-#     # # image_axis = draw_axis(
-#     # #     image_undistorted,
-#     # #     rotation_vector,
-#     # #     translation_vector,
-#     # #     camera_matrix,
-#     # #     length_of_axis=5e3,
-#     # # )
-#     # # plt.figure()
-#     # # plt.imshow(image_axis)
-
-# # # Camera homogoraphy matrix
-# # P = new_camera_matrix.dot(np.hstack((R, translation_vector)))
-# # # Camera matrix times rotation matrix
-# # M = new_camera_matrix.dot(R)
-
-# # # Center based on homogenous coordinates (see page 163 of Hartley and Zisserman)
-# # center = np.hstack(
-# #     (
-# #         np.linalg.det(P[:, 1:]),
-# #         -np.linalg.det(P[:, [0, 2, 3]]),
-# #         np.linalg.det(P[:, [0, 1, 3]]),
-# #         -np.linalg.det(P[:, [0, 1, 2]]),
-# #     )
-# # )
-# # # See https://docs.opencv.org/4.x/d9/dab/tutorial_homography.html
-# # # Determine camera center (see equation 6.8 of Hartley and Zisserman)
-# # camera_center = -np.linalg.inv(R).dot(translation_vector)
-# # # Distance from camera center to objective plane
-# # distance = np.abs(camera_center[2])[0]
-# # # Determine the rotation matrix between the two planes assuming that the objective plane is parallel to the x-y plane
-# # R_plane = np.eye(3).dot(R.transpose())
-# # # Determine the translation vector between the two planes
-# # t_plane = np.eye(3).dot(-R.transpose().dot(translation_vector)) + (
-# #     translation_vector + np.array([[0], [0], [-distance]])
-# # )
-# # # Determine the normal
-# # n_plane = np.array([[0], [0], [1]])
-# # # Determine the homography matrix
-# # H = R_plane + (t_plane.dot(n_plane.transpose())) / distance
-
-# # # # C = -np.linalg.inv(R)*translation_vector
-# # # # Ht = -camera_matrix * C
-# # # # Hr = new_camera_matrix * np.linalg.inv(R) * np.linalg.inv(camera_matrix)
-# # # R, _ = cv.Rodrigues(rotation_vector)
-# # # Hr = camera_matrix @ R.T @ np.linalg.pinv(camera_matrix)
