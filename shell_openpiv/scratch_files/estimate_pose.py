@@ -16,6 +16,8 @@ if __name__ == "__main__":
     data_file = Path(
         r"n:\Projects\11208500\11208914\B. Measurements and calculations\12 - LS-PIV\01 - Markers\camera01_image_points_v02.xlsx"
     )
+    image_file = r"p:\archivedprojects\11208914-meting-stuw-driel\HDD001\20230127-meting01\093453.661.tif"
+    image = cv.cvtColor(cv.imread(image_file), cv.COLOR_BGR2RGB)
 
     # Load the 2D-3D correspondences from a CSV file
     df = pd.read_excel(data_file)
@@ -77,7 +79,7 @@ if __name__ == "__main__":
     # Plot image points
     plt.figure()
     plt.imshow(image)
-    plt.plot(image_points[:, 0], image_points[:, 1], "og", markersize=5)
+    plt.plot(image_points[:, 0], image_points[:, 1], "og", markersize=1)
     plt.plot(
         back_proj_image_points[:, 0], back_proj_image_points[:, 1], "+r", markersize=15
     )
@@ -109,14 +111,13 @@ if __name__ == "__main__":
         new_camera_matrix,
     )
 
-    plt.figure()
-    plt.imshow(image_undistorted)
-
     # Rotation vector to rotation matrix
     R, _ = cv.Rodrigues(rotation_vector)
 
     # Open-earth rotation matrix
-    z_shift = -(13.46 - 6.59)
+    # Corresponds to source: https://math.stackexchange.com/questions/1683403/projecting-from-one-2d-plane-onto-another-2d-plane
+    # Rotatoin matrix from source: https://github.com/openearth/flamingo/blob/master/flamingo/rectification/rectification.py
+    z_shift = 0
     R_open_earth = np.hstack(
         [
             R[:, :2],
@@ -124,7 +125,7 @@ if __name__ == "__main__":
         ]
     )
     # Compute homography matrix
-    H = np.linalg.inv(np.matmul(new_camera_matrix, R_open_earth))
+    H = np.linalg.inv(new_camera_matrix @ R_open_earth)
     # Normalize homography matrix
     H = H / H[2, 2]
 
@@ -155,7 +156,7 @@ if __name__ == "__main__":
     H_scale[1, 1] = sy
 
     # Reference point to change the origin of the image
-    reference_point = np.matmul(H_shift, H).dot(
+    reference_point = (H_shift @ H).dot(
         np.vstack([np.expand_dims(image_points[6, :], axis=1), 1])
     )
     reference_point = reference_point / reference_point[2]
@@ -195,3 +196,157 @@ if __name__ == "__main__":
     plt.ylim(y_limit_array)
     plt.xlabel(r"$x$ [cm]")
     plt.ylabel(r"$y$ [cm]")
+    plt.show(block=False)
+
+    # Determine error of the back-projection in the warped image
+    error_back_proj_warped = np.linalg.norm(
+        cv.perspectiveTransform(
+            np.array(image_points, np.float32).reshape(-1, 1, 2),
+            H_shift_origin @ H_shift @ H_scale @ H,
+        )
+        - cv.perspectiveTransform(
+            np.array(back_proj_image_points, np.float32).reshape(-1, 1, 2),
+            H_shift_origin @ H_shift @ H_scale @ H,
+        ),
+        axis=2,
+    ).squeeze()
+    average_error = np.mean(error_back_proj_warped)
+
+    # # %% Check other implementation. We follow the implementation discussed on:
+    # # https://docs.opencv.org/4.x/d9/dab/tutorial_homography.html
+    # # Define known quantities
+    # R0_camera1, *_ = cv.Rodrigues(rotation_vector)
+    # t0_camera1 = translation_vector.copy()
+
+    # # Plot 3D figure of the camera pose
+    # camera_center = R0_camera1.T @ t0_camera1
+    # sensor_size = (14.44e-3, 9.90e-3)
+    # focal_length = (camera_matrix[0, 0] * 4.5e-3, camera_matrix[1, 1] * 4.5e-3)
+    # average_focal_length = np.mean(focal_length)
+
+    # camera_plane = np.array(
+    #     [
+    #         [average_focal_length, 0, sensor_size[0] / 2, 1],
+    #         [average_focal_length, 0, -sensor_size[0] / 2, 1],
+    #         [average_focal_length, average_focal_length, sensor_size[1] / 2, 1],
+    #         [average_focal_length, average_focal_length, -sensor_size[1] / 2, 1],
+    #     ]
+    # )
+    # camera_plane_to_world = camera_plane @ np.hstack([R, translation_vector]).T
+    # from matplotlib.patches import Patch
+    # from mpl_toolkits.mplot3d.art3d import Poly3DCollection
+
+    # fig = plt.figure()
+    # ax = fig.add_subplot(111, projection="3d")
+    # # ax.scatter(object_points[:, 0], object_points[:, 1], object_points[:, 2], "b")
+    # # ax.scatter(0, 0, 0, "r", marker="+")
+    # ax.scatter(camera_center[0], camera_center[1], camera_center[2], "r", marker="*")
+    # for idx_object_point in np.arange(0, object_points.shape[0]):
+    #     # print(object_points[idx_object_point, :])
+    #     ax.plot(
+    #         [camera_center[0,0], object_points[idx_object_point, 0]],
+    #         [camera_center[1,0], object_points[idx_object_point, 1]],
+    #         [camera_center[2,0], object_points[idx_object_point, 2]],
+    #         "b",
+    #     )
+
+    # t_1to2 = R @ ( - R.T @ t0_camera1) + t0_camera1
+    # # ax.scatter(camera_plane_to_world[:, 0], camera_plane_to_world[:, 1], camera_plane_to_world[:, 2], "g")
+    # # ax.add_collection3d(
+    # #     Poly3DCollection(
+    # #         [camera_plane_to_world]
+    # #     )
+    # # )
+    # # ax.scatter(t0_camera1[0], t0_camera1[1], t0_camera1[2], "g")
+    # # Plot camera plane in world coordinate system
+    # # from matplotlib.patches import Patch
+    # # from mpl_toolkits.mplot3d.art3d import Poly3DCollection
+
+    # # aspect_ratio = 1
+    # # focal_len_scaled = 1
+    # # color = "r"
+    # # vertex_std = np.array(
+    # #     [
+    # #         [0, 0, 0, 1],
+    # #         [
+    # #             focal_len_scaled * aspect_ratio,
+    # #             -focal_len_scaled * aspect_ratio,
+    # #             focal_len_scaled,
+    # #             1,
+    # #         ],
+    # #         [
+    # #             focal_len_scaled * aspect_ratio,
+    # #             focal_len_scaled * aspect_ratio,
+    # #             focal_len_scaled,
+    # #             1,
+    # #         ],
+    # #         [
+    # #             -focal_len_scaled * aspect_ratio,
+    # #             focal_len_scaled * aspect_ratio,
+    # #             focal_len_scaled,
+    # #             1,
+    # #         ],
+    # #         [
+    # #             -focal_len_scaled * aspect_ratio,
+    # #             -focal_len_scaled * aspect_ratio,
+    # #             focal_len_scaled,
+    # #             1,
+    # #         ],
+    # #     ]
+    # # )
+    # # vertex_transformed = vertex_std @ np.hstack([R, translation_vector]).T
+    # # ax.plot_trisurf(
+    # #     vertex_transformed[:, 0], vertex_transformed[:, 1], vertex_transformed[:, 2]
+    # # )
+    # # meshes = [[vertex_transformed[0, :-1], vertex_transformed[1][:-1], vertex_transformed[2, :-1]],
+    # #                     [vertex_transformed[0, :-1], vertex_transformed[2, :-1], vertex_transformed[3, :-1]],
+    # #                     [vertex_transformed[0, :-1], vertex_transformed[3, :-1], vertex_transformed[4, :-1]],
+    # #                     [vertex_transformed[0, :-1], vertex_transformed[4, :-1], vertex_transformed[1, :-1]],
+    # #                     [vertex_transformed[1, :-1], vertex_transformed[2, :-1], vertex_transformed[3, :-1], vertex_transformed[4, :-1]]]
+    # # ax.add_collection3d(
+    # #     Poly3DCollection(meshes, facecolors=color))
+
+    # # # Rotation matrix of the camera
+    # # R_camera, *_ = cv.Rodrigues(rotation_vector)
+    # # # Normal of the x-y plane in the world coordinate system
+    # # n = np.array([[0], [0], [1]])
+    # # # Define the translation vector of the plane
+    # # t_plane = np.array([[0], [0], [-3]])
+    # # # Normal of the x-y plane in the camera coordinate system
+    # # n_camera = R_camera.dot(n)
+    # # # Origin of the x-y plane in the camera coordinate system
+    # # origin_plane = np.array([[0], [0], [0]])
+    # # origin_camera = R_camera.dot(origin_plane) + translation_vector
+    # # # Distance from the camera to the x-y plane
+    # # distance_camera_to_plane = 1.0/n_camera.T.dot(origin_camera)
+    # # # Determine the rotation matrix of the camera plane to the world plane
+    # # R_plane = np.eye(3)
+    # # R_camera_to_world =  R_plane @ R_camera.T
+    # # # Determine the translation vector of the camera plane to the world plane
+    # # translation_camera_to_world = R_plane @ (-R_camera.T @ translation_vector ) + t_plane
+    # # # Determine the homography matrix
+    # # H_camera_to_plane = R_camera_to_world - translation_camera_to_world.dot(n_camera.T) / distance_camera_to_plane
+    # # # Projective homography matrix
+    # # G = new_camera_matrix @ H_camera_to_plane @ np.linalg.inv(new_camera_matrix)
+    # # # Normalize projective homography matrix
+    # # G = G / G[2, 2]
+
+    # # warp image corner points to determine bounding box
+    # w, h, _ = image.shape
+    # points = [[0, 0], [0, h], [w, h], [w, 0]]
+    # points = np.array(points, np.float32).reshape(-1, 1, 2)
+    # projected_points = cv.perspectiveTransform(points, G).squeeze()
+
+    # # Determine bounding box
+    # bbox = cv.boundingRect(projected_points.astype(np.int32))
+
+    # # Warp image
+    # image_warped = cv.warpPerspective(
+    #     image_undistorted,
+    #     G,
+    #     (bbox[2], bbox[3]),
+    #     cv.INTER_NEAREST,
+    # )
+
+    # plt.figure()
+    # plt.imshow(image_warped)
